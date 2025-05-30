@@ -1,0 +1,6 @@
+# Backend ignores
+backend/__pycache__/
+backend/instance/
+backend/.env
+backend/venv/
+backend/.vscode/
