@@ -3,6 +3,7 @@ import axiosInstance from "@/lib/axios";
 import { API_ENDPOINTS } from "@/config/api";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "react-router-dom";
+import axios from "@/lib/axios";
 
 interface User {
   id: string;
@@ -14,11 +15,19 @@ interface User {
 
 interface AuthContextType {
   currentUser: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<{
+    user?: User;
+    token?: string;
+    twoFactorRequired?: boolean;
+    userId?: string | number;
+  }>;
   register: (email: string, password: string, displayName: string) => Promise<{ user: User; token: string } | undefined>;
   logout: () => Promise<void>;
   loading: boolean;
   error: string | null;
+  twoFactorRequired: boolean;
+  tempUserId: string | number | null;
+  verify2fa: (userId: string | number, code: string) => Promise<{ user: User; token: string } | undefined>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -39,6 +48,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
+  const [tempUserId, setTempUserId] = useState<string | number | null>(null);
   const { toast } = useToast();
   const location = useLocation();
 
@@ -57,6 +68,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         try {
           const response = await axiosInstance.get(API_ENDPOINTS.auth.me);
           setCurrentUser(response.data.user);
+          axiosInstance.defaults.headers.common['Authorization'] = `Bearer ${token}`;
         } catch (err) {
           console.error("Auth check failed:", err);
           localStorage.removeItem('token');
@@ -71,25 +83,50 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     checkAuth();
   }, [location.pathname]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<{
+    user?: User;
+    token?: string;
+    twoFactorRequired?: boolean;
+    userId?: string | number;
+  }> => {
     setLoading(true);
     setError(null);
-    
+    setTwoFactorRequired(false);
+    setTempUserId(null);
+
     try {
-      const response = await axiosInstance.post(API_ENDPOINTS.auth.login, {
-        email,
-        password
-      });
-      
-      const { token, user } = response.data;
-      localStorage.setItem('token', token);
-      setCurrentUser(user);
-      
-      toast({
-        title: "Connexion réussie",
-        description: "Vous êtes maintenant connecté à votre compte."
-      });
+      const response = await axios.post("/auth/login", { email, password });
+
+      if (response.status === 202) {
+        setTwoFactorRequired(true);
+        setTempUserId(response.data.user_id);
+        setError(response.data.message || "2FA code is required");
+        toast({
+          title: "Authentification en deux facteurs requise",
+          description: response.data.message || "Veuillez entrer le code de votre application d'authentification.",
+        });
+        return { twoFactorRequired: true, userId: response.data.user_id };
+      }
+
+      if (response.status === 200) {
+        const { token, user } = response.data;
+        localStorage.setItem('token', token);
+        setCurrentUser(user);
+        axiosInstance.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        toast({
+          title: "Connexion réussie",
+          description: "Vous êtes maintenant connecté à votre compte."
+        });
+        return { user, token };
+      }
+
+      setError(response.data.message || "Une erreur inattendue est survenue lors de la connexion.");
+      return { user: null, token: null };
+
     } catch (err: any) {
+      console.error("Login failed:", err);
+      setTwoFactorRequired(false);
+      setTempUserId(null);
       const message = err.response?.data?.message || "Échec de la connexion";
       setError(message);
       toast({
@@ -103,7 +140,51 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     }
   };
 
-  const register = async (email: string, password: string, displayName: string) => {
+  const verify2fa = async (userId: string | number, code: string): Promise<{ user: User; token: string } | undefined> => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await axios.post(API_ENDPOINTS.auth.verify2fa, {
+        user_id: userId,
+        code: code,
+      });
+
+      if (response.status === 200) {
+        const { token, user } = response.data;
+        localStorage.setItem('token', token);
+        setCurrentUser(user);
+        axiosInstance.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+        setTwoFactorRequired(false);
+        setTempUserId(null);
+
+        toast({
+          title: "Vérification 2FA réussie",
+          description: "Connexion complète."
+        });
+        return { user, token };
+      }
+
+      setError(response.data.message || "Erreur inattendue lors de la vérification 2FA.");
+      return undefined;
+
+    } catch (err: any) {
+      console.error("2FA verification failed:", err);
+      const message = err.response?.data?.message || "Code 2FA invalide.";
+      setError(message);
+      toast({
+        title: "Erreur 2FA",
+        description: message,
+        variant: "destructive"
+      });
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const register = async (email: string, password: string, displayName: string): Promise<{ user: User; token: string } | undefined> => {
     setLoading(true);
     setError(null);
     
@@ -182,10 +263,23 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     register,
     logout,
     loading,
-    error
+    error,
+    twoFactorRequired,
+    tempUserId,
+    verify2fa,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
+export const login = async (email: string, password: string) => {
+  try {
+    const response = await axios.post("/auth/login", { email, password });
+    // Save token, etc.
+    return response.data;
+  } catch (error: any) {
+    throw error; // Forward error to LoginForm
+  }
 };
 
 

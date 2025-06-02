@@ -31,12 +31,12 @@ const RegisterForm = () => {
       setFormError("Les mots de passe ne correspondent pas");
       return false;
     }
-    
-    if (password.length < 6) {
-      setFormError("Le mot de passe doit contenir au moins 6 caractères");
+
+    if (password.length < 12) {
+      setFormError("Le mot de passe doit contenir au moins 12 caractères");
       return false;
     }
-    
+
     setFormError("");
     return true;
   };
@@ -115,6 +115,7 @@ const RegisterForm = () => {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
+            minLength={12}
           />
         </div>
         

@@ -24,13 +24,6 @@ const queryClient = new QueryClient();
 // Protected route component
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { currentUser, loading } = useAuth();
-  const navigate = useNavigate();
-  
-  useEffect(() => {
-    if (!loading && !currentUser) {
-      navigate('/login');
-    }
-  }, [currentUser, loading, navigate]);
   
   if (loading) {
     return (
@@ -41,7 +34,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   }
   
   if (!currentUser) {
-    return null;
+    return <Navigate to="/login" replace />;
   }
   
   return <>{children}</>;
@@ -50,13 +43,6 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 // Public route component (redirects if already authenticated)
 const PublicRoute = ({ children }: { children: React.ReactNode }) => {
   const { currentUser, loading } = useAuth();
-  const navigate = useNavigate();
-  
-  useEffect(() => {
-    if (!loading && currentUser) {
-      navigate('/dashboard');
-    }
-  }, [currentUser, loading, navigate]);
   
   if (loading) {
     return (
@@ -67,7 +53,7 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
   }
   
   if (currentUser) {
-    return null;
+    return <Navigate to="/dashboard" replace />;
   }
   
   return <>{children}</>;

@@ -6,6 +6,10 @@ export const API_ENDPOINTS = {
     register: `${API_URL}/auth/register`,
     me: `${API_URL}/auth/me`,
     deleteUser: `${API_URL}/auth/users`,
+    init2fa: `${API_URL}/auth/2fa/setup/init`,
+    confirm2fa: `${API_URL}/auth/2fa/setup/confirm`,
+    verify2fa: `${API_URL}/auth/2fa/verify`,
+    disable2fa: `${API_URL}/auth/2fa/disable`,
   },
   files: {
     list: `${API_URL}/files`,

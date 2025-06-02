@@ -23,8 +23,8 @@ def create_app(config_class=Config):
     
     # Configure CORS to accept requests from frontend with credentials
     CORS(app, 
-         resources={r"/*": {"origins": "*"}},
-         allow_credentials=True,
+         origins=["http://localhost:8080"],  # Port du frontend
+         supports_credentials=True,
          methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"])
     
@@ -42,42 +42,15 @@ def create_app(config_class=Config):
 
     @app.after_request
     def after_request(response):
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        response.headers["Access-Control-Allow-Origin"] = "http://localhost:8080"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET,PUT,POST,DELETE,OPTIONS"
         return response
     
     return app
 
 if __name__ == "__main__":
     app = create_app()
-    
-    # Create all tables if they don't exist
-    with app.app_context():
-        db.create_all()
-        
-        # Create a test admin user if none exists
-        if not User.query.filter_by(email='admin@inpt.ma').first():
-            admin = User(
-                email='admin@inpt.ma',
-                display_name='Admin User',
-                role='admin',
-                status='active'
-            )
-            admin.set_password('admin123')
-            db.session.add(admin)
-            
-            # Create a test regular user
-            user = User(
-                email='user@example.com',
-                display_name='Test User',
-                role='user',
-                status='active'
-            )
-            user.set_password('user123')
-            db.session.add(user)
-            
-            db.session.commit()
-    
     app.run(debug=True, host="localhost", port=5000, threaded=True)
 

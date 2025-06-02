@@ -1,8 +1,11 @@
 from flask import Blueprint, request, jsonify
 from services.auth_service import AuthService
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from models import User, db
 import logging
+from datetime import datetime, timedelta
+import pyotp
+import base64
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -52,35 +55,138 @@ def register():
         logger.exception("Unexpected error during registration")
         return jsonify({"message": f"Erreur inattendue: {str(e)}"}), 500
 
-@auth_bp.route('/login', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
-    if request.method == 'OPTIONS':
-        return '', 200
-        
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"message": "Aucune donnée fournie"}), 400
-            
-        email = data.get('email')
-        password = data.get('password')
-        
-        if not email or not password:
-            return jsonify({"message": "Email et mot de passe requis"}), 400
-            
-        user, token, error = AuthService.login_user(email, password)
-        
-        if error:
-            return jsonify({"message": error}), 401
-            
-        return jsonify({
-            "token": token,
-            "user": user.to_dict()
-        }), 200
-        
-    except Exception as e:
-        logger.exception("Unexpected error during login")
-        return jsonify({"message": f"Erreur inattendue: {str(e)}"}), 500
+    print("LOGIN ROUTE CALLED")  # Add this line
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({'message': 'Invalid credentials'}), 401
+
+    # Check lockout
+    if hasattr(user, "lockout_until") and user.lockout_until and user.lockout_until > datetime.utcnow():
+        seconds_left = int((user.lockout_until - datetime.utcnow()).total_seconds())
+        return jsonify({'message': 'locked', 'seconds_left': seconds_left}), 403
+
+    if not user.check_password(password):
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= 3:
+            user.lockout_until = datetime.utcnow() + timedelta(seconds=30)
+            user.failed_login_attempts = 0
+            db.session.commit()
+            return jsonify({'message': 'locked', 'seconds_left': 30}), 403
+        db.session.commit()
+        return jsonify({'message': 'Invalid credentials'}), 401
+
+    # Success: reset attempts
+    user.failed_login_attempts = 0
+    user.lockout_until = None
+    db.session.commit()
+
+    # Check if 2FA is enabled
+    if user.is_2fa_enabled:
+        # If 2FA is enabled, return a status indicating 2FA is required
+        # We won't issue the full token yet
+        return jsonify({"message": "2FA required", "user_id": user.id}), 202 # Use 202 Accepted
+
+    # If 2FA is NOT enabled, issue the full token
+    access_token = create_access_token(identity=user.id)
+    return jsonify({'token': access_token, 'user': user.to_dict()}), 200
+
+@auth_bp.route('/2fa/setup/init', methods=['POST'])
+@jwt_required()
+def init_2fa_setup():
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+
+    if user.is_2fa_enabled:
+        return jsonify({"message": "2FA is already enabled for this user"}), 400
+
+    # Generate a secret key for the user
+    secret = pyotp.random_base32()
+    user.two_factor_secret = secret
+    db.session.commit()
+
+    # Generate the provisioning URI (for QR code)
+    app_name = "SecureApp"
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(user.email, issuer_name=app_name)
+
+    return jsonify({"secret": secret, "qr_uri": uri}), 200
+
+@auth_bp.route('/2fa/setup/confirm', methods=['POST'])
+@jwt_required()
+def confirm_2fa_setup():
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    data = request.get_json()
+    code = data.get('code')
+
+    if not user.two_factor_secret:
+        return jsonify({"message": "2FA setup not initiated"}), 400
+
+    if user.is_2fa_enabled:
+         return jsonify({"message": "2FA is already enabled"}), 400
+
+    if not code:
+        return jsonify({"message": "2FA code is required"}), 400
+
+    totp = pyotp.TOTP(user.two_factor_secret)
+    if totp.verify(code):
+        user.is_2fa_enabled = True
+        db.session.commit()
+        return jsonify({"message": "2FA enabled successfully"}), 200
+    else:
+        return jsonify({"message": "Invalid 2FA code"}), 400
+
+@auth_bp.route('/2fa/verify', methods=['POST'])
+def verify_2fa():
+    data = request.get_json()
+    user_id = data.get('user_id') # Get user_id from the initial login step
+    code = data.get('code')
+
+    if not user_id or not code:
+        return jsonify({"message": "User ID and 2FA code are required"}), 400
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    if not user.is_2fa_enabled or not user.two_factor_secret:
+        return jsonify({"message": "2FA not enabled for this user"}), 400
+
+    totp = pyotp.TOTP(user.two_factor_secret)
+    if totp.verify(code):
+        # If 2FA code is valid, issue the full access token
+        access_token = create_access_token(identity=user.id)
+        return jsonify({'token': access_token, 'user': user.to_dict()}), 200
+    else:
+        return jsonify({"message": "Invalid 2FA code"}), 400
+
+@auth_bp.route('/2fa/disable', methods=['POST'])
+@jwt_required()
+def disable_2fa():
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    data = request.get_json()
+    code = data.get('code')
+
+    if not user.is_2fa_enabled or not user.two_factor_secret:
+        return jsonify({"message": "2FA is not enabled for this user"}), 400
+
+    if not code:
+        return jsonify({"message": "2FA code is required"}), 400
+
+    totp = pyotp.TOTP(user.two_factor_secret)
+    if totp.verify(code):
+        user.is_2fa_enabled = False
+        user.two_factor_secret = None # Remove secret after disabling
+        db.session.commit()
+        return jsonify({"message": "2FA disabled successfully"}), 200
+    else:
+        return jsonify({"message": "Invalid 2FA code"}), 400
 
 @auth_bp.route('/me', methods=['GET'])
 @jwt_required()

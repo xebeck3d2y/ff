@@ -58,22 +58,33 @@ def get_files(user):
     }), 200
 
 @file_bp.route('', methods=['POST'])
-@jwt_required_with_user
-def upload_file(user):
-    # Check if file is in request
+@jwt_required()
+def upload_file():
+    user_id = get_jwt_identity()
+    print("UPLOAD: user_id", user_id)
     if 'file' not in request.files:
+        print("NO FILE PART")
         return jsonify({"message": "No file part"}), 400
-        
     file = request.files['file']
-    
-    # Check if file is empty
+    print("UPLOAD: filename", file.filename)
     if file.filename == '':
+        print("NO SELECTED FILE")
         return jsonify({"message": "No selected file"}), 400
-        
-    # Upload the file
-    uploaded_file = FileService.upload_file(user.id, file)
-    
-    return jsonify(uploaded_file.to_dict()), 201
+    try:
+        from flask import current_app
+        upload_folder = current_app.config['UPLOAD_FOLDER']
+        print("UPLOAD_FOLDER:", upload_folder)
+        if not os.path.exists(upload_folder):
+            print("UPLOAD: folder does not exist, creating...")
+            os.makedirs(upload_folder, exist_ok=True)
+        uploaded_file = FileService.upload_file(user_id, file)
+        print("UPLOAD OK")
+        return jsonify(uploaded_file.to_dict()), 201
+    except Exception as e:
+        import traceback
+        print("UPLOAD ERROR:", e)
+        traceback.print_exc()
+        return jsonify({"message": f"Upload failed: {str(e)}"}), 500
 
 @file_bp.route('/<int:file_id>', methods=['GET'])
 @jwt_required_with_user

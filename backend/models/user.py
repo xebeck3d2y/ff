@@ -1,5 +1,6 @@
 from datetime import datetime
 from . import db, bcrypt
+from sqlalchemy import Column, String, Boolean
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -12,6 +13,8 @@ class User(db.Model):
     status = db.Column(db.String(20), nullable=False, default='active')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    two_factor_enabled = Column(Boolean, default=False)
+    two_factor_secret = Column(String, nullable=True)  # Store the secret key for 2FA
     
     # Relationship
     files = db.relationship('File', backref='owner', lazy=True, cascade='all, delete-orphan')
